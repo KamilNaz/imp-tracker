@@ -549,7 +549,11 @@ function genQR() {
     return;
   }
 
-  output.innerHTML = '<div class="qr-outer"><div id="qr-canvas"></div><p class="qr-info">Show this QR code to another officer to scan.<br><strong>' + rec.rank + ' ' + rec.first + ' ' + rec.last + '</strong><br>' + rec.vtype + '</p></div>';
+  window._lastQRPayload = payload;
+  output.innerHTML = '<div class="qr-outer"><div id="qr-canvas"></div><p class="qr-info">Show this QR code to another officer to scan.<br><strong>' + rec.rank + ' ' + rec.first + ' ' + rec.last + '</strong><br>' + rec.vtype + '</p></div>'
+    + '<div style="margin-top:12px"><p style="font-size:12px;color:var(--text2);margin-bottom:6px">Camera not working? Share as text instead:</p>'
+    + '<button class="btn" id="copy-btn" onclick="copyJSON()">Copy record as text</button>'
+    + '<div id="copy-result"></div></div>';
 
   try {
     new QRCode(document.getElementById('qr-canvas'), {
@@ -825,6 +829,31 @@ function clearAll() {
   saveData();
   alert('All records deleted.');
   renderData();
+}
+
+// ─── COPY JSON ───────────────────────────────────────────────────────────────
+function copyJSON() {
+  const payload = window._lastQRPayload;
+  if (!payload) { alert('No record selected.'); return; }
+  const btn = document.getElementById('copy-btn');
+  const result = document.getElementById('copy-result');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(payload)
+      .then(() => {
+        if (btn) btn.textContent = 'Copied!';
+        if (result) result.innerHTML = '<p style="font-size:12px;color:var(--green);margin-top:6px">Text copied to clipboard. Now paste it in WhatsApp/SMS/email to the other officer, who pastes it in the Manual paste field.</p>';
+        setTimeout(() => { if (btn) btn.textContent = 'Copy record as text'; }, 3000);
+      })
+      .catch(() => showTextFallback(payload, result));
+  } else {
+    showTextFallback(payload, result);
+  }
+}
+
+function showTextFallback(payload, result) {
+  if (result) result.innerHTML = '<p style="font-size:12px;color:var(--text2);margin-top:8px;margin-bottom:6px">Select all text below and copy manually:</p>'
+    + '<textarea style="width:100%;height:80px;font-size:11px;padding:8px;border:0.5px solid var(--border2);border-radius:var(--radius-sm);background:var(--bg);color:var(--text);font-family:monospace" readonly onclick="this.select()">'
+    + payload.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</textarea>';
 }
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
