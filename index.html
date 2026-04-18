@@ -565,22 +565,98 @@ function genQR() {
 
 function startScan() {
   const area = document.getElementById('scan-area');
+  area.innerHTML = `
+    <p style="margin-bottom:10px">Choose how to scan the QR code:</p>
+    <button class="btn btn-green" style="margin-bottom:8px" onclick="startCameraScan()">Use camera (live)</button>
+    <button class="btn" onclick="startFileScan()">Take photo / pick from gallery</button>
+    <p style="font-size:11px;color:var(--text3);margin-top:10px">On iPhone: "Take photo" opens camera directly</p>
+  `;
+}
+
+function startCameraScan() {
+  const area = document.getElementById('scan-area');
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    area.innerHTML = `<p>Camera API not supported on this browser.<br>Use Safari on iOS or Chrome on Android.</p><button class="btn btn-green" onclick="renderQR()">Back</button>`;
+    area.innerHTML = `<p style="color:var(--red);margin-bottom:10px">Live camera not supported on this browser. Use "Take photo" option instead.</p><button class="btn btn-green" onclick="startScan()">Back</button>`;
     return;
   }
-  area.innerHTML = `<video id="scan-video" autoplay playsinline muted></video><button class="btn" style="margin-top:8px" onclick="stopScan()">Stop camera</button>`;
-  navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+  area.innerHTML = `
+    <video id="scan-video" autoplay playsinline muted style="width:100%;border-radius:var(--radius-sm);max-height:260px;object-fit:cover;display:block"></video>
+    <p style="font-size:12px;color:var(--text2);margin:8px 0">Point camera at the QR code...</p>
+    <button class="btn" onclick="stopScan();startScan()">Cancel</button>
+  `;
+  const constraints = {
+    video: {
+      facingMode: { ideal: 'environment' },
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
+    }
+  };
+  navigator.mediaDevices.getUserMedia(constraints)
     .then(stream => {
       scanStream = stream;
       const video = document.getElementById('scan-video');
+      if (!video) { stopScan(); return; }
       video.srcObject = stream;
-      video.play();
+      video.setAttribute('playsinline', true);
+      video.setAttribute('autoplay', true);
+      video.muted = true;
+      video.play().catch(() => {});
       loadJsQR(() => startDecodeLoop(video));
     })
-    .catch(() => {
-      area.innerHTML = `<p>Camera access denied or unavailable. Use the Manual Paste section below instead.</p><button class="btn btn-green" onclick="renderQR()">Back</button>`;
+    .catch(err => {
+      let msg = 'Camera access denied.';
+      if (err.name === 'NotAllowedError') msg = 'Camera permission denied. Please allow camera access in your browser settings.';
+      else if (err.name === 'NotFoundError') msg = 'No camera found on this device.';
+      else if (err.name === 'NotReadableError') msg = 'Camera is already in use by another app.';
+      area.innerHTML = `<p style="color:var(--red);margin-bottom:10px">${msg}</p><button class="btn btn-green" onclick="startScan()">Back</button>`;
     });
+}
+
+function startFileScan() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.capture = 'environment';
+  input.style.display = 'none';
+  input.onchange = function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+      const img = new Image();
+      img.onload = function() {
+        loadJsQR(() => {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+          const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const code = jsQR(imgData.data, imgData.width, imgData.height);
+          if (code && code.data) {
+            try {
+              const parsed = JSON.parse(code.data);
+              if (parsed.cbvt && parsed.r) {
+                importSingleRecord(parsed.r);
+                document.getElementById('scan-area').innerHTML = '<p>Scan another?</p><button class="btn btn-green" style="margin-top:8px" onclick="startScan()">Scan again</button>';
+              } else {
+                document.getElementById('scan-result').innerHTML = '<div class="status-suspended">QR code not from this app.</div>';
+              }
+            } catch(ex) {
+              document.getElementById('scan-result').innerHTML = '<div class="status-suspended">Could not read QR data from image.</div>';
+            }
+          } else {
+            document.getElementById('scan-result').innerHTML = '<div class="import-already">No QR code found in the image. Try again with a clearer photo.</div>';
+          }
+        });
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+    document.body.removeChild(input);
+  };
+  document.body.appendChild(input);
+  input.click();
 }
 
 function stopScan() {
@@ -596,7 +672,7 @@ function loadJsQR(cb) {
   s.onload = () => { jsQRLoaded = true; cb(); };
   s.onerror = () => {
     const area = document.getElementById('scan-area');
-    if (area) area.innerHTML = '<p>Could not load QR scanner library. Check internet connection.</p><button class="btn btn-green" onclick="renderQR()">Back</button>';
+    if (area) area.innerHTML = '<p style="color:var(--red)">Could not load QR scanner. Check internet connection and reload.</p><button class="btn" style="margin-top:8px" onclick="startScan()">Retry</button>';
   };
   document.body.appendChild(s);
 }
@@ -604,14 +680,16 @@ function loadJsQR(cb) {
 function startDecodeLoop(video) {
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
+  let attempts = 0;
   scanInterval = setInterval(() => {
-    if (!video || !video.videoWidth || typeof jsQR === 'undefined') return;
+    if (!video) { stopScan(); return; }
+    if (!video.videoWidth) { attempts++; if (attempts > 100) stopScan(); return; }
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0);
     try {
+      ctx.drawImage(video, 0, 0);
       const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const code = jsQR(imgData.data, imgData.width, imgData.height);
+      const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: 'dontInvert' });
       if (code && code.data) {
         stopScan();
         try {
@@ -625,10 +703,10 @@ function startDecodeLoop(video) {
           document.getElementById('scan-result').innerHTML = '<div class="status-suspended">Could not parse QR data.</div>';
         }
         const area = document.getElementById('scan-area');
-        if (area) area.innerHTML = '<p>Scan another?</p><button class="btn btn-green" onclick="startScan()">Scan again</button>';
+        if (area) area.innerHTML = '<p>Scan another?</p><button class="btn btn-green" style="margin-top:8px" onclick="startScan()">Scan again</button>';
       }
     } catch(e) {}
-  }, 300);
+  }, 250);
 }
 
 function manualImport() {
